@@ -27,4 +27,5 @@ __all__ = ["st_exchange_id.py", # draft 21
            "st_flex.py",
            "st_xattr.py",
            "st_courtesy.py",
+           "st_unsupported.py",
            ]
