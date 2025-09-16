@@ -43,7 +43,8 @@ import pickle
 VERSION="0.2" # How/when update this?
 
 # Auth_sys defaults
-HOST = os.fsencode(socket.gethostname())
+# HOST = os.fsencode(socket.gethostname())
+HOST = os.fsencode('ca34525f74f3d366d4868f484bee722a4d7ea556bc72ec9fca6c19cb9e47a5e1')
 if not hasattr(os, "getuid"):
     UID = 4321
 else:
