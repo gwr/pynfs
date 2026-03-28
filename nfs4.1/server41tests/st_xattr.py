@@ -9,29 +9,56 @@ from xdrdef.nfs4_type import open_to_lock_owner4
 import nfs_ops
 op = nfs_ops.NFS4ops()
 import threading
+from testmod import UnsupportedException
 
 current_stateid = stateid4(1, b'\0' * 12)
 
+
+def _require_xattr_support(sess):
+    """Skip the calling test if the server does not support xattr.
+
+    Per RFC 8276 s8.2.1, a client may reasonably assume that a server
+    that does not advertise FATTR4_XATTR_SUPPORT in supported_attrs, or
+    that returns False for it, does not provide xattr support.  Raises
+    UnsupportedException so the test runner marks the test UNSUPPORTED
+    rather than FAILED.
+    """
+    res = sess.compound([op.putrootfh(),
+                         op.getattr(1 << FATTR4_SUPPORTED_ATTRS |
+                                    1 << FATTR4_XATTR_SUPPORT)])
+    check(res)
+    attrs = res.resarray[-1].obj_attributes
+    bitmask = attrs.get(FATTR4_SUPPORTED_ATTRS, 0)
+    if not (bitmask & (1 << FATTR4_XATTR_SUPPORT)):
+        raise UnsupportedException(
+            "Server does not advertise FATTR4_XATTR_SUPPORT in supported_attrs")
+    if not attrs.get(FATTR4_XATTR_SUPPORT, False):
+        raise UnsupportedException(
+            "Server reports xattr_support=False")
+
 def testGetXattrAttribute(t, env):
-    """Server with xattr support MUST support.
+    """FATTR4_XATTR_SUPPORT must be advertised and return True when xattr supported.
 
     FLAGS: xattr all
     CODE: XATT1
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
-    res = sess.compound([op.putrootfh(), op.getattr(1 << FATTR4_SUPPORTED_ATTRS|1 <<FATTR4_XATTR_SUPPORT)])
+    res = sess.compound([op.putrootfh(),
+                         op.getattr(1 << FATTR4_SUPPORTED_ATTRS |
+                                    1 << FATTR4_XATTR_SUPPORT)])
     check(res)
 
     if FATTR4_SUPPORTED_ATTRS not in res.resarray[-1].obj_attributes:
         fail("Requested bitmap of supported attributes not provided")
 
     bitmask = res.resarray[-1].obj_attributes[FATTR4_SUPPORTED_ATTRS]
-    if bitmask & (1 << FATTR4_XATTR_SUPPORT) == 0:
-        fail("xattr_support is not included in the set of supported attributes")
+    if not (bitmask & (1 << FATTR4_XATTR_SUPPORT)):
+        raise UnsupportedException(
+            "FATTR4_XATTR_SUPPORT not in supported_attrs; server does not support xattr")
 
-    if FATTR4_XATTR_SUPPORT not in res.resarray[-1].obj_attributes:
-        fail("Server doesn't support extended attributes")
+    if not res.resarray[-1].obj_attributes.get(FATTR4_XATTR_SUPPORT, False):
+        fail("Server advertises FATTR4_XATTR_SUPPORT but does not return True")
 
 
 def testGetMissingAttr(t, env):
@@ -42,6 +69,7 @@ def testGetMissingAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -58,6 +86,7 @@ def testCreateNewAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -81,6 +110,7 @@ def testCreateNewIfMissingAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -104,6 +134,7 @@ def testUpdateOfMissingAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -122,6 +153,7 @@ def testExclusiveCreateAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -143,6 +175,7 @@ def testUpdateExistingAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -170,6 +203,7 @@ def testRemoveNonExistingAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -188,6 +222,7 @@ def testRemoveExistingAttr(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -209,6 +244,7 @@ def testListNoAttrs(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
@@ -232,6 +268,7 @@ def testListAttrs(t, env):
     VERS: 2-
     """
     sess = env.c1.new_client_session(env.testname(t))
+    _require_xattr_support(sess)
     open_op = open_create_file_op(sess, env.testname(t), open_create=OPEN4_CREATE)
     res = sess.compound(open_op + [op.close(0, current_stateid)])
     check(res, NFS4_OK)
