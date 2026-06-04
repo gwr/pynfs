@@ -405,6 +405,24 @@ def testMaxreqs(t, env):
                           chan_attrs.ca_maxrequests, "count4"):
         fail("Server allows surprisingly large fore_channel maxreqs")
 
+def testLargeForeAndBackMaxreqs(t, env):
+    """A CREATE_SESSION with large fore and back channel maxreqs succeeds
+
+    FLAGS: create_session all
+    CODE: CSESS22a
+    """
+    LARGE_SLOTS = 2049
+
+    c = env.c1.new_client(env.testname(t))
+    fore_attrs = channel_attrs4(0, 8192, 8192, 8192, 128, LARGE_SLOTS, [])
+    back_attrs = channel_attrs4(0, 8192, 8192, 8192, 128, LARGE_SLOTS, [])
+    sess1 = c.create_session(fore_attrs=fore_attrs, back_attrs=back_attrs)
+
+    if sess1.fore_channel.maxrequests > LARGE_SLOTS:
+        fail("Server increased fore_channel maxreqs")
+    if sess1.back_channel.maxrequests > LARGE_SLOTS:
+        fail("Server increased back_channel maxreqs")
+
 def testNotOnlyOp(t, env):
     """Check for NFS4ERR_NOT_ONLY_OP
 
