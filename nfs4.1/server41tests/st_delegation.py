@@ -421,3 +421,43 @@ def testDelegGrantUsesCurrentSession(t, env):
                                          access)
     res = sess_cb.compound([op.putfh(fh), op.delegreturn(deleg.read.stateid)])
     check(res)
+
+def testDelegRecallDelayAfterGrantSessionDestroyed(t, env):
+    """Recall should delay when the granting session is gone
+
+    One client ID gets two sessions: S1 with a backchannel and S2 without one.
+    A delegation is granted via S1, then S1 is destroyed. A conflicting open
+    from another client should get NFS4ERR_DELAY instead of using S2 for
+    callback routing.
+
+    FLAGS: create_session destroy_session open deleg all
+    CODE: DELEG27
+    """
+    name = env.testname(t)
+    access = OPEN4_SHARE_ACCESS_READ | OPEN4_SHARE_ACCESS_WANT_READ_DELEG
+    sess_cb, sess_nocb = _new_mixed_backchannel_sessions(t, env)
+
+    fh, deleg = __create_file_with_deleg(sess_cb, name, access)
+
+    res = sess_cb.client.c.compound([op.destroy_session(sess_cb.sessionid)])
+    check(res)
+
+    sess_b = env.c1.new_client_session(b"%s_b" % name)
+    claim = open_claim4(CLAIM_NULL, name)
+    owner = open_owner4(0, b"owner_b")
+    how = openflag4(OPEN4_NOCREATE)
+    open_op = op.open(0, OPEN4_SHARE_ACCESS_WRITE, OPEN4_SHARE_DENY_NONE,
+                      owner, how, claim)
+    slot = sess_b.compound_async(env.home + [open_op])
+    res = sess_b.c.listen(slot.xid, timeout=30)
+    slot.xid = None
+    res = sess_b.update_seq_state(res, slot)
+    res = sess_b.remove_seq_op(res)
+    check(res, NFS4ERR_DELAY)
+
+    res = sess_nocb.compound([op.putfh(fh), op.delegreturn(deleg.read.stateid)])
+    check(res)
+
+    res = open_file(sess_b, name, access=OPEN4_SHARE_ACCESS_WRITE)
+    check(res)
+    close_file(sess_b, res.resarray[-1].object, stateid=res.resarray[-2].stateid)
