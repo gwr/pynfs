@@ -38,6 +38,12 @@ def _new_mixed_backchannel_sessions(t, env):
     sess_nocb.compound([op.reclaim_complete(FALSE)])
     return sess_cb, sess_nocb
 
+def _listen_async_open(sess, slot, timeout=30):
+    res = sess.c.listen(slot.xid, timeout=timeout)
+    slot.xid = None
+    res = sess.update_seq_state(res, slot)
+    return sess.remove_seq_op(res)
+
 def _testDeleg(t, env, openaccess, want, breakaccess, sec = None, sec2 = None):
     recall = threading.Event()
     def pre_hook(arg, env):
@@ -431,7 +437,7 @@ def testDelegRecallDelayAfterGrantSessionDestroyed(t, env):
     callback routing.
 
     FLAGS: create_session destroy_session open deleg all
-    CODE: DELEG27
+    CODE: DELEG27a
     """
     name = env.testname(t)
     access = OPEN4_SHARE_ACCESS_READ | OPEN4_SHARE_ACCESS_WANT_READ_DELEG
@@ -449,10 +455,7 @@ def testDelegRecallDelayAfterGrantSessionDestroyed(t, env):
     open_op = op.open(0, OPEN4_SHARE_ACCESS_WRITE, OPEN4_SHARE_DENY_NONE,
                       owner, how, claim)
     slot = sess_b.compound_async(env.home + [open_op])
-    res = sess_b.c.listen(slot.xid, timeout=30)
-    slot.xid = None
-    res = sess_b.update_seq_state(res, slot)
-    res = sess_b.remove_seq_op(res)
+    res = _listen_async_open(sess_b, slot)
     check(res, NFS4ERR_DELAY)
 
     res = sess_nocb.compound([op.putfh(fh), op.delegreturn(deleg.read.stateid)])
@@ -461,3 +464,74 @@ def testDelegRecallDelayAfterGrantSessionDestroyed(t, env):
     res = open_file(sess_b, name, access=OPEN4_SHARE_ACCESS_WRITE)
     check(res)
     close_file(sess_b, res.resarray[-1].object, stateid=res.resarray[-2].stateid)
+
+def testDelegRecallUsesReplacementSession(t, env):
+    """Recall should use a replacement callback session
+
+    One client ID gets two sessions: S1 with a backchannel and S2 without one.
+    A delegation is granted via S1, then S1 is destroyed. After the client
+    creates a replacement session S3 with a backchannel, a conflicting open
+    from another client should trigger CB_RECALL and complete once the
+    delegation is returned through S3.
+
+    FLAGS: create_session destroy_session open deleg all
+    CODE: DELEG27b
+    """
+    recall = threading.Event()
+
+    def pre_hook(arg, env):
+        recall.stateid = arg.stateid
+        env.notify = recall.set
+
+    def post_hook(arg, env, res):
+        return res
+
+    name = env.testname(t)
+    access = OPEN4_SHARE_ACCESS_READ | OPEN4_SHARE_ACCESS_WANT_READ_DELEG
+    sess_cb, sess_nocb = _new_mixed_backchannel_sessions(t, env)
+
+    fh, deleg = __create_file_with_deleg(sess_cb, name, access)
+
+    res = sess_cb.client.c.compound([op.destroy_session(sess_cb.sessionid)])
+    check(res)
+
+    sess_b = env.c1.new_client_session(b"%s_b" % name)
+    sess_cb2 = sess_cb.client.create_session()
+    sess_cb2.compound([op.reclaim_complete(FALSE)])
+    sess_cb2.client.cb_pre_hook(OP_CB_RECALL, pre_hook)
+    sess_cb2.client.cb_post_hook(OP_CB_RECALL, post_hook)
+
+    claim = open_claim4(CLAIM_NULL, name)
+    owner = open_owner4(0, b"owner_b2")
+    how = openflag4(OPEN4_NOCREATE)
+    open_op = op.open(0, OPEN4_SHARE_ACCESS_WRITE, OPEN4_SHARE_DENY_NONE,
+                      owner, how, claim)
+    slot = sess_b.compound_async(env.home + [open_op])
+    completed = recall.wait(2)
+
+    if not completed:
+        res = _listen_async_open(sess_b, slot)
+        cleanup = sess_nocb.compound([op.putfh(fh),
+                                      op.delegreturn(deleg.read.stateid)])
+        check(cleanup, [NFS4_OK, NFS4ERR_BAD_STATEID])
+        fail("Did not get callback on replacement session, got %s"
+             % nfsstat4[res.status])
+
+    env.sleep(.1)
+    res = sess_cb2.compound([op.putfh(fh), op.delegreturn(recall.stateid)])
+    check(res)
+
+    res = _listen_async_open(sess_b, slot)
+    check(res, [NFS4_OK, NFS4ERR_DELAY])
+    if res.status == NFS4_OK:
+        close_file(sess_b, res.resarray[-1].object,
+                   stateid=res.resarray[-2].stateid)
+    else:
+        env.sleep(.1)
+        res = open_file(sess_b, name, access=OPEN4_SHARE_ACCESS_WRITE)
+        check(res)
+        close_file(sess_b, res.resarray[-1].object,
+                   stateid=res.resarray[-2].stateid)
+
+    res = sess_nocb.compound([op.putfh(fh), op.delegreturn(deleg.read.stateid)])
+    check(res, [NFS4_OK, NFS4ERR_BAD_STATEID])
