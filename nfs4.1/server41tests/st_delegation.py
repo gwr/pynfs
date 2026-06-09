@@ -30,6 +30,14 @@ def _create_file_with_deleg(sess, name, access):
     fh, deleg = __create_file_with_deleg(sess, name, access)
     return fh
 
+def _new_mixed_backchannel_sessions(t, env):
+    client = env.c1.new_client(env.testname(t))
+    sess_cb = client.create_session()
+    sess_cb.compound([op.reclaim_complete(FALSE)])
+    sess_nocb = client.create_session(flags=0)
+    sess_nocb.compound([op.reclaim_complete(FALSE)])
+    return sess_cb, sess_nocb
+
 def _testDeleg(t, env, openaccess, want, breakaccess, sec = None, sec2 = None):
     recall = threading.Event()
     def pre_hook(arg, env):
@@ -389,3 +397,27 @@ def testCbGetattrWithChange(t, env):
     if FATTR4_TIME_DELEG_MODIFY in attrs2:
         if attrs1[FATTR4_TIME_MODIFY] == attrs2[FATTR4_TIME_DELEG_MODIFY]:
             fail("Bad modify time: ", attrs1[FATTR4_TIME_MODIFY], " == ", attrs2[FATTR4_TIME_DELEG_MODIFY])
+
+def testDelegGrantUsesCurrentSession(t, env):
+    """Ensure delegation grant uses the current session
+
+    One client ID gets two sessions: one with a backchannel and one without.
+    Verify that a delegation is not granted on the session without a
+    backchannel just because a sibling session for the same client ID has one.
+
+    FLAGS: create_session open deleg all
+    CODE: DELEG26
+    """
+    access = OPEN4_SHARE_ACCESS_READ | OPEN4_SHARE_ACCESS_WANT_READ_DELEG
+    sess_cb, sess_nocb = _new_mixed_backchannel_sessions(t, env)
+
+    res = create_file(sess_nocb, b"%s_nocb" % env.testname(t), access=access)
+    check(res)
+    deleg = res.resarray[-2].delegation
+    if _got_deleg(deleg):
+        fail("Granted delegation on a session without a backchannel")
+
+    fh, deleg = __create_file_with_deleg(sess_cb, b"%s_cb" % env.testname(t),
+                                         access)
+    res = sess_cb.compound([op.putfh(fh), op.delegreturn(deleg.read.stateid)])
+    check(res)
